@@ -17,6 +17,7 @@ static const uint32_t multiboot2_header[] = {
     0x00000008
 };
 
+
 // Simple keyboard input (PS/2 set 1 scancodes)
 static const char scancode_table[0x80] = {
     0, 0x1B, '1', '2', '3', '4', '5', '6', '7', '8',

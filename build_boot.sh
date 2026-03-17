@@ -32,6 +32,6 @@ menuentry "MYUNIXLIKEOS" {
 }
 GRUBCFG
 
-i686-elf-grub-mkrescue -o os-bios.iso iso
+$GRUB_RESCUE -o os-bios.iso iso
 
 qemu-system-x86_64 -m 2G -boot d -drive file=os-bios.iso,format=raw,if=ide,media=cdrom -serial mon:stdio -nographic

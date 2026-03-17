@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! command -v i686-elf-grub-mkrescue >/dev/null 2>&1; then
-    echo "ERROR: i686-elf-grub-mkrescue not found, install i686-elf-grub"
+if command -v i686-elf-grub-mkrescue >/dev/null 2>&1; then
+    GRUB_RESCUE="i686-elf-grub-mkrescue"
+elif command -v grub-mkrescue >/dev/null 2>&1; then
+    GRUB_RESCUE="grub-mkrescue"
+else
+    echo "ERROR: grub-mkrescue not found."
     exit 1
 fi
 

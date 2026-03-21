@@ -336,6 +336,9 @@ static void do_clear(){
     terminal_row = 0;
     terminal_col = 0;
 }
+static int do_echo(int argc, char** argv) {
+    return cmd_echo(argc, argv);
+}
 
 static size_t str_len(const char* s) {
     size_t l = 0;
@@ -433,6 +436,7 @@ static void shell_loop(void) {
         if (compare_string(argv[0], "nano") == 0) { do_nano(argc, argv); continue; }
         if (compare_string(argv[0], "help") == 0) { do_help(argc, argv); continue; }
         if (compare_string(argv[0], "clear") == 0) { do_clear(); continue; }
+        if (compare_string(argv[0], "echo") == 0) { do_echo(argc, argv); continue; }
         terminal_write("Unknown command\n");
     }
 }

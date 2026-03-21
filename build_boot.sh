@@ -15,7 +15,7 @@ nasm -f elf entry.asm -o entry.o
 i686-elf-gcc -ffreestanding -O2 -m32 -fno-stack-protector -fno-builtin -Wall -Wextra -Iheaders -Icommands \
     -c kernel/kernel.c commands/*.c
 
-i686-elf-ld -m elf_i386 -n -T linker.ld -o kernel.elf entry.o kernel.o ls.o mkdir.o touch.o cat.o cd.o grep.o fs.o help.o
+i686-elf-ld -m elf_i386 -n -T linker.ld -o kernel.elf entry.o kernel.o ls.o mkdir.o touch.o cat.o cd.o grep.o fs.o help.o echo.o
 
 i686-elf-objcopy -O binary kernel.elf kernel.bin
 

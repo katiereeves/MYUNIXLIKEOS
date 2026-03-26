@@ -40,6 +40,7 @@ SRC = \
 	$(CMD_DIR)/fs.c \
 	$(CMD_DIR)/help.c \
 	$(CMD_DIR)/echo.c \
+	$(CMD_DIR)/nano.c \
 	$(BIN_DIR)/vi/vi.c \
 
 STDIO_SRC = \
@@ -50,6 +51,7 @@ STRING_SRC = \
 	$(STRING_DIR)/memset.c \
 	$(STRING_DIR)/strcmp.c \
 	$(STRING_DIR)/strlen.c \
+	$(STRING_DIR)/strstr.c \
 
 ELF = kernel.elf
 BIN = kernel.bin
@@ -73,13 +75,16 @@ all: $(ISO)
 entry.o: entry.asm
 	$(AS) $(ASFLAGS) $< -o $@
 
+interrupt.o: interrupt.asm
+	$(AS) $(ASFLAGS) $< -o $@
+
 libc:
 	$(CC) $(CFLAGS) -c $(LIBC_SRC)
 	$(AR) rcs $(LIBC) $(LIBC_OBJS)
 
-$(ELF): entry.o libc
+$(ELF): entry.o interrupt.o libc
 	$(CC) $(CFLAGS) -c $(SRC)
-	$(LD) $(LDFLAGS) -o $@ entry.o $(KERN_OBJS) $(LIBC)
+	$(LD) $(LDFLAGS) -o $@ entry.o interrupt.o $(KERN_OBJS) $(LIBC)
 
 $(BIN): $(ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -97,5 +102,5 @@ run: all
 	$(QEMU) $(QEMUFLAGS)
 
 clean:
-	rm -f entry.o $(KERN_OBJS) $(LIBC_OBJS) $(LIBC) $(ELF) $(BIN)
+	rm -f entry.o interrupt.o $(KERN_OBJS) $(LIBC_OBJS) $(LIBC) $(ELF) $(BIN)
 	rm -rf $(ISO_DIR) $(ISO)

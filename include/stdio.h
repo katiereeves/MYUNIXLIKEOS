@@ -34,5 +34,6 @@ extern FILE *stderr;
 
 int putchar(int c);
 int getchar();
+int printf(const char *format, ...);
 
 #endif /* _STDIO_H_ */

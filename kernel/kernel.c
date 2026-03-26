@@ -6,6 +6,7 @@
 #include "io.h"
 #include "commands.h"
 #include "string.h"
+#include "stdio.h"
 
 #define TERM_WIDTH 80
 #define TERM_HEIGHT 25
@@ -360,72 +361,6 @@ size_t str_len(const char* s) {
     return l;
 }
 
-int cmd_nano(int argc, char** argv) {
-    if (argc < 2) {
-        terminal_write("Usage: nano <filename>\n");
-        return -1;
-    }
-
-    const char* path = argv[1];
-    vnode_t* file = vfs_lookup(path);
-    if (!file) {
-        if (k_touch(path) != 0) {
-            terminal_write("nano: cannot create file\n");
-            return -1;
-        }
-        file = vfs_lookup(path);
-    }
-    if (!file || !(file->flags & VFS_FILE)) {
-        terminal_write("nano: not a file\n");
-        return -1;
-    }
-
-    char input[256];
-    char buffer[4096];
-    size_t len = 0;
-    if (file->content) {
-        char* p = file->content;
-        while (*p && len < sizeof(buffer)-1) {
-            buffer[len++] = *p++;
-        }
-    }
-    buffer[len] = '\0';
-
-    terminal_write("nano: edit mode (type :wq to save, :q! to cancel)\n");
-    while (1) {
-        terminal_write("nano> ");
-        read_line(input, sizeof(input));
-
-        if (strcmp(input, ":wq") == 0) {
-            if (!file->content) {
-                file->content = (char*)pmm_alloc_z(4096);
-            }
-            if (!file->content) {
-                terminal_write("nano: out of memory\n");
-                return -1;
-            }
-            size_t i;
-            for (i = 0; i < len && i < 4095; i++) file->content[i] = buffer[i];
-            file->content[i-1] = '\0'; // remove last new line
-            terminal_write("nano: saved\n");
-            return 0;
-        }
-        if (strcmp(input, ":q!") == 0) {
-            terminal_write("nano: abort\n");
-            return 0;
-        }
-
-        size_t line_len = str_len(input);
-        if (len + line_len + 1 < sizeof(buffer)) {
-            for (size_t i = 0; i < line_len; i++) buffer[len + i] = input[i];
-            len += line_len;
-            buffer[len++] = '\n';
-            buffer[len] = '\0';
-        } else {
-            terminal_write("nano: buffer full\n");
-        }
-    }
-}
 
 static int do_nano(int argc, char** argv) {
     return cmd_nano(argc, argv);
@@ -467,6 +402,19 @@ static void shell_loop(void) {
         terminal_write(argv[0]);
         terminal_write("\n");
     }
+}
+int printf(const char *format, ...) {
+    // This just prints the raw string for now. 
+    // It will be replaced by Katie's full va_args version later.
+    while (*format) {
+        putchar(*format++);
+    }
+    return 0;
+}
+void syscall_handler(int num, int a1, int a2, int a3) {
+    // For now, just a simple print to prove the bridge works
+    // We'll add the real logic once katiereeves sends her syscall.h
+    printf("\n[KERNEL] Syscall %d received. Args: %d, %d, %d\n", num, a1, a2, a3);
 }
 
 void kernel_main(void) {

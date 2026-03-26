@@ -18,6 +18,7 @@ int cmd_grep(int argc, char** argv);
 int cmd_fs(int argc, char** argv);
 int cmd_help(int argc, char** argv);
 int cmd_nano(int argc, char** argv);
+void nano_help();
 int cmd_echo(int argc, char** argv);
 int cmd_vi(int argc, char** argv);
 

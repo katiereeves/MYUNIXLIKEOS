@@ -24,8 +24,11 @@ char    *strncpy(char *restrict, const char *restrict, size_t);
 char    *strpbrk(const char *, const char *);
 char    *strrchr(const char *, int);
 size_t   strspn(const char *, const char *);
-char    *strstr(const char *, const char *);
+char    *strstr(const char *haystack, const char *needle);
 char    *strtok(char *restrict, const char *restrict);
 size_t   strxfrm(char *restrict, const char *restrict, size_t);
 
+
 #endif /* string.h */
+
+

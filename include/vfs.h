@@ -22,6 +22,7 @@ typedef struct vnode {
     struct vnode* parent;
     struct vnode* children[16];
     uint32_t child_count;
+    uint32_t size;
     char* content; // for files
 } vnode_t;
 

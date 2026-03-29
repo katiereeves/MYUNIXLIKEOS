@@ -1,164 +1,26 @@
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
+/* TODO:
+ * - Move more things out of here.
+ * - Move keyboard drivers to a seperate file.
+ */
+#include "stdint.h"
+#include "stddef.h"
+#include "stdbool.h"
 #include "vfs.h"
 #include "pmm.h"
 #include "io.h"
 #include "commands.h"
 #include "string.h"
 #include "stdio.h"
+#include "sys/syscall.h"
+#include "idt.h"
+#include "gdt.h"
+#include "sys/time.h"
 
-#define TERM_WIDTH 80
-#define TERM_HEIGHT 25
-
-// Multiboot2 header for GRUB
-__attribute__((section(".multiboot2_header"), used, aligned(8)))
-static const uint32_t multiboot2_header[] = {
-    0xE85250D6,
-    0x00000000,
-    0x00000010,
-    (uint32_t)(-(0xE85250D6 + 0 + 0x10)),
-    0x00000000,
-    0x00000008
-};
-
-void move_cursor(int x, int y) {
-    uint16_t pos = y * 80 + x;
-
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
-
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (uint8_t)(pos & 0xFF));
-}
-
-// Simple keyboard input (PS/2 set 1 scancodes)
-static const char scancode_table[0x80] = {
-    0, 0x1B, '1', '2', '3', '4', '5', '6', '7', '8',
-    '9', '0', '-', '=', '\b', '\t', 'q', 'w', 'e', 'r',
-    't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n', 0,
-    'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',
-    '\'', '`', 0, '\\', 'z', 'x', 'c', 'v', 'b', 'n',
-    'm', ',', '.', '/', 0, '*', 0, ' ', 0,
-    [0x53] = 0x7F /* delete */
-};
-
-static const char scancode_table_shift[0x80] = {
-    0, 0x1B, '!', '@', '#', '$', '%', '^', '&', '*',
-    '(', ')', '_', '+', '\b', '\t', 'Q', 'W', 'E', 'R',
-    'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', 0,
-    'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
-    '"', '~', 0, '|', 'Z', 'X', 'C', 'V', 'B', 'N',
-    'M', '<', '>', '?', 0, '*', 0, ' ', 0,
-    [0x53] = 0x7F
-};
-
-static bool shift_down = false;
-
-static volatile uint16_t* const VGA_BUFFER = (volatile uint16_t*)0xB8000;
-uint32_t terminal_row = 0;
-uint32_t terminal_col = 0;
-
-vnode_t* vfs_root = NULL;
-vnode_t* current_dir = NULL;
-char fs_type_name[16] = "EXT4";
-
-void terminal_putc(char c) {
-    if(c == 0x1B){ // ignore esc
-        return;
-    }
-    if (c == '\n') {
-        terminal_col = 0;
-        terminal_row++;
-        if (terminal_row >= 25) terminal_row = 24;
-        // update cursor pos
-        move_cursor(terminal_col, terminal_row);
-        return;
-    }
-    VGA_BUFFER[terminal_row * TERM_WIDTH + terminal_col] = (uint16_t)(' ' | 0x0F00);
-    VGA_BUFFER[terminal_row * TERM_WIDTH + terminal_col] = ((uint16_t)0x0F << 8) | (uint8_t)c;
-    terminal_col++;
-    if (terminal_col >= TERM_WIDTH) {
-        terminal_col = 0;
-        terminal_row++;
-        if (terminal_row >= TERM_HEIGHT) terminal_row = 24;
-    }
-    move_cursor(terminal_col, terminal_row);
-}
-
-static void terminal_backspace(void) {
-    if (terminal_col == 0) {
-        if (terminal_row == 0) return;
-        terminal_row--;
-        terminal_col = 79;
-    } else {
-        terminal_col--;
-    }
-    VGA_BUFFER[terminal_row * TERM_WIDTH + terminal_col] = ((uint16_t)0x0F << 8) | ' ';
-    move_cursor(terminal_col, terminal_row);
-}
-
-void terminal_write(const char* s) {
-    while (*s) terminal_putc(*s++);
-}
-
-void copy_string(char* dest, const char* src) {
-    while ((*dest++ = *src++)) ;
-}
-
-char keyboard_getchar(void) {
-    for (;;) {
-        while (!(inb(0x64) & 1));
-        uint8_t c = inb(0x60);
-        if (c == 0x2A || c == 0x36) { shift_down = true;  continue; }
-        if (c == 0xAA || c == 0xB6) { shift_down = false; continue; }
-        if (c & 0x80) continue;
-        return shift_down ? scancode_table_shift[c] : scancode_table[c];
-    }
-}
-
-void read_line(char* buf, size_t size) {
-    size_t idx = 0;
-    while (true) {
-        char c = keyboard_getchar();
-        if (!c) continue;
-        if (c == '\r' || c == '\n') {
-            terminal_write("\n");
-            buf[idx] = '\0';
-            return;
-        }
-        if ((c == '\b' || c == 0x7F) && idx > 0) {
-            idx--;
-            terminal_backspace();
-            continue;
-        }
-        if (idx + 1 < size) {
-            buf[idx++] = c;
-            terminal_putc(c);
-        }
-    }
-}
-
-static void split_args(char* input, char** argv, int* argc) {
-    *argc = 0;
-    bool in_token = false;
-    while (*input) {
-        if (*input == ' ' || *input == '\t') {
-            *input = '\0';
-            in_token = false;
-        } else if (!in_token) {
-            in_token = true;
-            argv[(*argc)++] = input;
-        }
-        input++;
-    }
-}
+char fs_type_name[16] = "Ext2";
 
 #define MAX_PAGES 128
 static uint8_t pmm_bitmap[MAX_PAGES / 8];
 static uint8_t pmm_page_pool[MAX_PAGES][PAGE_SIZE];
-static vnode_t vnodes_pool[64];
-static uint32_t vnodes_pool_used = 0;
 
 void bitmap_set(uint64_t bit) {
     if (bit >= MAX_PAGES) return;
@@ -193,7 +55,7 @@ void* pmm_alloc_page(void) {
 void pmm_free_page(void* ptr) {
     if (!ptr) return;
     uintptr_t base = (uintptr_t)pmm_page_pool;
-    uintptr_t cur = (uintptr_t)ptr;
+    uintptr_t cur  = (uintptr_t)ptr;
     if (cur < base) return;
     uint64_t idx = (cur - base) / PAGE_SIZE;
     if (idx < MAX_PAGES) bitmap_clear(idx);
@@ -212,220 +74,77 @@ void* pmm_alloc_z(size_t size) {
     return p;
 }
 
-static vnode_t* alloc_vnode(void) {
-    if (vnodes_pool_used >= 64) return NULL;
-    vnode_t* n = &vnodes_pool[vnodes_pool_used++];
-    n->name[0] = '\0';
-    n->flags = 0;
-    n->parent = NULL;
-    n->child_count = 0;
-    n->content = NULL;
-    for (int i = 0; i < 16; i++) n->children[i] = NULL;
-    return n;
-}
+/* kernel space streams */
 
-void vfs_init(void) {
-    vnodes_pool_used = 0;
-    vfs_root = alloc_vnode();
-    if (!vfs_root) return;
-    copy_string(vfs_root->name, "/");
-    vfs_root->flags = VFS_DIRECTORY;
-    vfs_root->parent = vfs_root;
-    vfs_root->child_count = 0;
-    vfs_root->content = NULL;
-    current_dir = vfs_root;
-}
+static unsigned char _stdout_buf[2048];
+static unsigned char _stderr_buf[256];
+static unsigned char _stdin_buf[256];
 
-vnode_t* vfs_lookup(const char* path) {
-    if (!path || !*path) return NULL;
-    if (strcmp(path, "/") == 0) return vfs_root;
-    if (strcmp(path, ".") == 0) return current_dir;
-    if (strcmp(path, "..") == 0) {
-        return current_dir->parent ? current_dir->parent : current_dir;
-    }
+static FILE _stdout_f = {
+    .flags  = 1,
+    .fileno = 1,
+    .buf    = _stdout_buf,
+    .bptr   = _stdout_buf,
+    .len    = sizeof(_stdout_buf),
+    .free   = 0,
+    .iobf   = _IOLBF,
+    .eof    = 0,
+};
 
-    if (*path == '/') path++;
-    for (uint32_t i = 0; i < current_dir->child_count; i++) {
-        vnode_t* c = current_dir->children[i];
-        if (strcmp(c->name, path) == 0) return c;
-    }
-    return NULL;
-}
+static FILE _stderr_f = {
+    .flags  = 1,
+    .fileno = 2,
+    .buf    = _stderr_buf,
+    .bptr   = _stderr_buf,
+    .len    = sizeof(_stderr_buf),
+    .free   = 0,
+    .iobf   = _IONBF,
+    .eof    = 0,
+};
 
-int k_mkdir(const char* path) {
-    if (!path || !*path) {
-        terminal_write("mkdir: missing name\n");
-        return -1;
-    }
-    if (!current_dir) return -1;
-    if (current_dir->child_count >= 16) {
-        terminal_write("mkdir: directory full\n");
-        return -1;
-    }
-    if (vfs_lookup(path)) {
-        terminal_write("mkdir: already exists\n");
-        return -1;
-    }
-    vnode_t* node = alloc_vnode();
-    if (!node) {
-        terminal_write("mkdir: out of nodes\n");
-        return -1;
-    }
-    copy_string(node->name, path);
-    node->flags = VFS_DIRECTORY;
-    node->parent = current_dir;
-    node->child_count = 0;
-    node->content = NULL;
-    current_dir->children[current_dir->child_count++] = node;
-    return 0;
-}
+static FILE _stdin_f = {
+    .flags  = 0,
+    .fileno = 0,
+    .buf    = _stdin_buf,
+    .bptr   = _stdin_buf,
+    .len    = sizeof(_stdin_buf),
+    .free   = 0,
+    .iobf   = _IOLBF,
+    .eof    = 0,
+};
 
-int k_touch(const char* path) {
-    if (!path || !*path) {
-        terminal_write("touch: missing name\n");
-        return -1;
-    }
-    if (!current_dir) return -1;
-    if (current_dir->child_count >= 16) {
-        terminal_write("touch: directory full\n");
-        return -1;
-    }
-    if (vfs_lookup(path)) {
-        terminal_write("touch: already exists\n");
-        return -1;
-    }
-    vnode_t* node = alloc_vnode();
-    if (!node) {
-        terminal_write("touch: out of nodes\n");
-        return -1;
-    }
-    copy_string(node->name, path);
-    node->flags = VFS_FILE;
-    node->parent = current_dir;
-    node->child_count = 0;
-    node->content = (char*)pmm_alloc_z(64);
-    if (node->content) node->content[0] = '\0';
-    current_dir->children[current_dir->child_count++] = node;
-    return 0;
-}
+FILE *stdout = &_stdout_f;
+FILE *stderr = &_stderr_f;
+FILE *stdin  = &_stdin_f;
 
-static int do_ls(int argc, char** argv) {
-    return cmd_ls(argc, argv);
-}
-
-static int do_mkdir(int argc, char** argv) {
-    return cmd_mkdir(argc, argv);
-}
-
-static int do_touch(int argc, char** argv) {
-    return cmd_touch(argc, argv);
-}
-
-static int do_cd(int argc, char** argv) {
-    return cmd_cd(argc, argv);
-}
-
-static int do_cat(int argc, char** argv) {
-    return cmd_cat(argc, argv);
-}
-
-static int do_grep(int argc, char** argv) {
-    return cmd_grep(argc, argv);
-}
-
-static int do_fs(int argc, char** argv) {
-    return cmd_fs(argc, argv);
-}
-
-static int do_help(int argc, char** argv) {
-    return cmd_help(argc, argv);
-}
-
-void do_clear(){
-    terminal_row = 0;
-    terminal_col = 0;
-    for(int32_t i = 0; i < TERM_WIDTH; i++)
-        for(int32_t j = 0; j < TERM_HEIGHT; j++)
-            terminal_putc(' ');
-
-    terminal_row = 0;
-    terminal_col = 0;
-}
-static int do_echo(int argc, char** argv) {
-    return cmd_echo(argc, argv);
-}
-
-size_t str_len(const char* s) {
-    size_t l = 0;
-    while (*s++) l++;
-    return l;
-}
-
-
-static int do_nano(int argc, char** argv) {
-    return cmd_nano(argc, argv);
-}
-
-static int do_vi(int argc, char** argv) {
-    return cmd_vi(argc, argv);
-}
-
-/* TODO:
- *  - Move shell to /bin/sh
- *  - Move Programs to /bin
- */
-static void shell_loop(void) {
-    char buf[256];
-    char* argv[16];
-    int argc;
-    while (1) {
-        terminal_write("root@dev_null# ");
-        for(int8_t i = 0; i < 16; i++)
-            argv[i] = '\0'; // clears stale data, TODO: memset
-
-        read_line(buf, sizeof(buf));
-        split_args(buf, argv, &argc);
-        if (argc == 0) continue;
-        if (strcmp(argv[0], "ls") == 0) { do_ls(argc, argv); continue; }
-        if (strcmp(argv[0], "mkdir") == 0) { do_mkdir(argc, argv); continue; }
-        if (strcmp(argv[0], "touch") == 0) { do_touch(argc, argv); continue; }
-        if (strcmp(argv[0], "cd") == 0) { do_cd(argc, argv); continue; }
-        if (strcmp(argv[0], "cat") == 0) { do_cat(argc, argv); continue; }
-        if (strcmp(argv[0], "grep") == 0) { do_grep(argc, argv); continue; }
-        if (strcmp(argv[0], "fs") == 0) { do_fs(argc, argv); continue; }
-        if (strcmp(argv[0], "nano") == 0) { do_nano(argc, argv); continue; }
-        if (strcmp(argv[0], "help") == 0) { do_help(argc, argv); continue; }
-        if (strcmp(argv[0], "clear") == 0) { do_clear(); continue; }
-        if (strcmp(argv[0], "echo") == 0) { do_echo(argc, argv); continue; }
-        if (strcmp(argv[0], "vi") == 0) { do_vi(argc, argv); continue; }
-        terminal_write("sh: command not found: ");
-        terminal_write(argv[0]);
-        terminal_write("\n");
-    }
-}
-int printf(const char *format, ...) {
-    // This just prints the raw string for now. 
-    // It will be replaced by Katie's full va_args version later.
-    while (*format) {
-        putchar(*format++);
-    }
-    return 0;
-}
-void syscall_handler(int num, int a1, int a2, int a3) {
-    // For now, just a simple print to prove the bridge works
-    // We'll add the real logic once katiereeves sends her syscall.h
-    printf("\n[KERNEL] Syscall %d received. Args: %d, %d, %d\n", num, a1, a2, a3);
-}
+/* stack_top is defined in entry.asm */
+extern uint32_t stack_top;
+extern void install_user_progs();
 
 void kernel_main(void) {
     pmm_init(NULL);
-    vfs_init();
-    current_dir = vfs_root;
+    fs_init();
+    idt_init();
+    gdt_init();
 
-    terminal_write("Unix-32 Kernel Booted with ");
-    terminal_write(fs_type_name);
-    terminal_write("\n");
-    terminal_write("Type help for commands\n");
+    /* set TSS esp0 to top of kernel stack — stable for all ring 3 syscalls */
+    tss_set_kernel_stack((uint32_t)&stack_top);
 
-    shell_loop();
+    install_user_progs();
+
+    printf("*nix IA-32 Kernel booted\n");
+
+    /* TODO: strftime */
+    time_t t;
+    time(&t);
+    struct tm bt;
+    const char *days[]   = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    const char *months[] = {
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    };
+    localtime_r(&t, &bt);
+    printf("%s %s %i:%i %i UTC\n", days[bt.tm_wday],
+        months[bt.tm_mon], bt.tm_hour, bt.tm_min, bt.tm_year);
+    sh();
 }

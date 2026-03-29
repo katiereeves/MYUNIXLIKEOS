@@ -1,3 +1,5 @@
+/* after we get a functioning fs and elf this will be depricated */
+
 #ifndef COMMANDS_H
 #define COMMANDS_H
 
@@ -21,5 +23,8 @@ int cmd_nano(int argc, char** argv);
 void nano_help();
 int cmd_echo(int argc, char** argv);
 int cmd_vi(int argc, char** argv);
+void cmd_clear();
+
+void sh(void);
 
 #endif

@@ -33,7 +33,8 @@ extern FILE *stdout;
 extern FILE *stderr;
 
 int putchar(int c);
+int putc(int c, FILE *stream);
 int getchar();
-int printf(const char *format, ...);
+int printf(const char *restrict, ...);
 
 #endif /* _STDIO_H_ */

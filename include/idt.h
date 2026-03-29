@@ -1,22 +1,20 @@
-#ifndef IDT_H
-#define IDT_H
+#ifndef _IDT_H_
+#define _IDT_H_
 
 #include <stdint.h>
 
-// IDT Entry structure for x86_64
+/* IDT Entry structure for IA-32 */
 struct idt_entry {
-    uint16_t isr_low;      // Lower 16 bits of ISR's address
-    uint16_t kernel_cs;    // Kernel code segment selector
-    uint8_t  ist;          // Interrupt Stack Table offset
-    uint8_t  attributes;   // Type and attributes (Flags)
-    uint16_t isr_mid;      // Middle 16 bits of ISR's address
-    uint32_t isr_high;     // Higher 32 bits of ISR's address
-    uint32_t reserved;     // Set to zero
+    uint16_t isr_low;      /* Lower 16 bits of ISR's address */
+    uint16_t kernel_cs;    /* Kernel code segment selector */
+    uint8_t  reserved;     /* Set to zero */
+    uint8_t  attributes;   /* Type and attributes (Flags) */
+    uint16_t isr_high;     /* Higher 16 bits of ISR's address */
 } __attribute__((packed));
 
 struct idt_ptr {
     uint16_t limit;
-    uint64_t base;
+    uint32_t base;         /* 32-bit base address */
 } __attribute__((packed));
 
 void idt_init(void);

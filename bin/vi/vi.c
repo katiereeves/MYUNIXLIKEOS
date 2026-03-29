@@ -25,7 +25,7 @@
 #include "stdio.h"
 #include "string.h"
 
-extern void do_clear();
+extern void cmd_clear();
 extern size_t terminal_col, terminal_row;
 
 #define LINE_MAX 2048 // should be later defined in limits.h
@@ -54,7 +54,7 @@ static void vi_print_status(const char *msg) {
 }
 
 static void vi_draw(const char *name, const char *buf, size_t len) {
-    do_clear();
+    cmd_clear();
     terminal_col = 0;
     terminal_row = 0;
 
@@ -169,12 +169,12 @@ int cmd_vi(int argc, char **argv) {
                     for (i = 0; i < save_len && i < VI_BUF - 1; i++)
                         file->content[i] = buf[i];
                     file->content[i] = '\0';
-                    do_clear();
+                    cmd_clear();
                     return 0;
                 }
 
                 if (strcmp(input, ":q!") == 0) {
-                    do_clear();
+                    cmd_clear();
                     return 0;
                 }
 

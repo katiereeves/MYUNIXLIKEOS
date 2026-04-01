@@ -3,6 +3,9 @@
 #ifndef _STDIO_H_
 #define _STDIO_H_
 
+#include "stddef.h"
+#include "sys/types.h"
+
 typedef struct file_t{
     int flags; /* -r, -r, -rw... */
     int fileno;
@@ -32,9 +35,23 @@ extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
 
+/* printing */
 int putchar(int c);
 int putc(int c, FILE *stream);
 int getchar();
+int getc(FILE *stream);
 int printf(const char *restrict, ...);
+
+/* file operations */
+FILE* fopen(const char *path, const char *mode);
+int fclose(FILE *stream);
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
+int fseek(FILE *stream, long offset, int whence);
+long ftell(FILE *stream);
+void rewind(FILE *stream);
+ssize_t getline(char **restrict lineptr, size_t *restrict n, FILE *restrict stream);
+
+static inline int feof(FILE *stream) { return stream ? (int)stream->eof : 1; }
 
 #endif /* _STDIO_H_ */

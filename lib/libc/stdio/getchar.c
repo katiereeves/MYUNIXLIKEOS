@@ -1,17 +1,9 @@
-/* Subject to change after file streams.
- * Standard implementation below.
- */
-
 #include "stdio.h"
+#include "sys/syscall.h"
 
-extern char keyboard_getchar();
-
-int getchar(){
-    return keyboard_getchar();
+int getchar(void) {
+    unsigned char c;
+    long n = syscall(SYS_read, 0L, (long)&c, 1L, 0, 0);
+    if (n <= 0) return EOF;
+    return (int)c;
 }
-
-/*
-int getchar(){
-    return getc(stdin);
-}
-*/

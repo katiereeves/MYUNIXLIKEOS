@@ -16,7 +16,7 @@ GRUB_RESCUE := $(shell \
 	fi)
 
 # Directories
-SYS_DIR      = ./kernel
+SYS_DIR      = ./sys
 DRVR_DIR     = $(SYS_DIR)/drivers
 DRVR_INP_DIR = $(DRVR_DIR)/input
 DRVR_VGA_DIR = $(DRVR_DIR)/video
@@ -43,41 +43,27 @@ OBJ_DIR       = $(USER_DIR)/obj/sys
 ASFLAGS = -f elf32
 CFLAGS  = -ffreestanding -O2 -m32 -fno-stack-protector -fno-builtin \
           -Wall -Wextra -I$(INCLUDE_DIR) -Icommands
-LDFLAGS = -m elf_i386 -n -T linker.ld
+LDFLAGS = -m elf_i386 -n -T $(SYS_DIR)/linker.ld
 
 # Userspace flags
 USER_CFLAGS = -ffreestanding -O2 -m32 -fno-stack-protector -fno-builtin \
               -fno-pie -no-pie \
               -Wall -Wextra -I$(INCLUDE_DIR)
-USER_LDFLAGS = -m elf_i386 -T user.ld
+USER_LDFLAGS = -m elf_i386 -T $(SYS_DIR)/user.ld
 
 # Kernel sources
-
 SRC = \
 	$(SYS_DIR)/kernel.c \
-	$(SYS_DIR)/fs.c \
+	$(SYS_DIR)/vfs.c \
 	$(SYS_DIR)/idt.c \
 	$(SYS_DIR)/gdt.c \
 	$(SYS_DIR)/syscall.c \
 	$(SYS_DIR)/elf.c \
-	$(SYS_DIR)/sys/stat/mkdir.c \
 	$(SYS_DIR)/sys/time/time.c \
 	$(SYS_DIR)/sys/time/localtime_r.c \
 	$(DRVR_INP_DIR)/pskey.c \
 	$(DRVR_VGA_DIR)/vgamode3.c \
 	$(DRVR_DIR)/nvram/nvram.c \
-	$(BIN_DIR)/ls/ls.c \
-	$(BIN_DIR)/mkdir/sh_mkdir.c \
-	$(BIN_DIR)/cat/cat.c \
-	$(BIN_DIR)/grep/grep.c \
-	$(BIN_DIR)/echo/echo.c \
-	$(BIN_DIR)/vi/vi.c \
-	$(BIN_DIR)/nano/nano.c \
-	$(CMD_DIR)/sh.c \
-	$(CMD_DIR)/cd/cd.c \
-	$(CMD_DIR)/help/help.c \
-	$(CMD_DIR)/touch/touch.c \
-	$(CMD_DIR)/clear/clear.c \
 
 # Kernel libc sources
 STDIO_SRC = \
@@ -85,10 +71,20 @@ STDIO_SRC = \
 	$(STDIO_DIR)/putc.c \
 	$(STDIO_DIR)/putchar.c \
 	$(STDIO_DIR)/printf.c \
+	$(STDIO_DIR)/fopen.c \
+	$(STDIO_DIR)/fclose.c \
+	$(STDIO_DIR)/freed.c \
+	$(STDIO_DIR)/fwrite.c \
+	$(STDIO_DIR)/fseek.c \
+	$(STDIO_DIR)/ftel.c \
+	$(STDIO_DIR)/rewind.c \
+	$(STDIO_DIR)/streams.c \
+	$(STDIO_DIR)/getline.c \
 
 STRING_SRC = \
 	$(STRING_DIR)/memset.c \
 	$(STRING_DIR)/memcpy.c \
+	$(STRING_DIR)/memmove.c \
 	$(STRING_DIR)/strcmp.c \
 	$(STRING_DIR)/strlen.c \
 	$(STRING_DIR)/strcpy.c \
@@ -97,39 +93,84 @@ STRING_SRC = \
 
 UNISTD_SRC = \
 	$(UNISTD_DIR)/write.c \
+	$(UNISTD_DIR)/read.c \
+	$(UNISTD_DIR)/close.c \
+	$(UNISTD_DIR)/lseek.c \
 	$(UNISTD_DIR)/execl.c \
+	$(UNISTD_DIR)/readline.c \
 
 FCNTL_SRC = \
 	$(FCNTL_DIR)/creat.c \
+	$(FCNTL_DIR)/open.c \
 
-LIBC_SRC  = $(STDIO_SRC) $(STRING_SRC) $(FCNTL_SRC) $(UNISTD_SRC)
+SYS_STAT_SRC = \
+	$(SYS_DIR)/sys/stat/mkdir.c \
+
+LIBC_SRC  = $(STDIO_SRC) $(STRING_SRC) $(FCNTL_SRC) $(UNISTD_SRC) $(SYS_STAT_SRC)
 
 # Userspace libc sources
+# NOTE: sys/sys/stat/mkdir.c is intentionally excluded here — it is compiled
+# separately as sys_stat_mkdir.o to avoid a name collision with bin/mkdir/mkdir.c,
+# both of which would otherwise flatten to mkdir.o via $(notdir ...).
 USER_LIBC_SRC = \
 	$(USER_LIBC_DIR)/stdio/printf.c \
 	$(USER_LIBC_DIR)/stdio/putchar.c \
 	$(USER_LIBC_DIR)/stdio/putc.c \
+	$(USER_LIBC_DIR)/stdio/getchar.c \
+	$(USER_LIBC_DIR)/stdio/getc.c \
+	$(USER_LIBC_DIR)/stdio/fopen.c \
+	$(USER_LIBC_DIR)/stdio/fclose.c \
+	$(USER_LIBC_DIR)/stdio/freed.c \
+	$(USER_LIBC_DIR)/stdio/fwrite.c \
+	$(USER_LIBC_DIR)/stdio/fseek.c \
+	$(USER_LIBC_DIR)/stdio/ftel.c \
+	$(USER_LIBC_DIR)/stdio/rewind.c \
+	$(USER_LIBC_DIR)/stdio/streams.c \
+	$(USER_LIBC_DIR)/stdio/getline.c \
 	$(USER_LIBC_DIR)/string/strlen.c \
 	$(USER_LIBC_DIR)/string/strcpy.c \
 	$(USER_LIBC_DIR)/string/strcmp.c \
 	$(USER_LIBC_DIR)/string/memcpy.c \
+	$(USER_LIBC_DIR)/string/memmove.c \
 	$(USER_LIBC_DIR)/string/memset.c \
 	$(USER_LIBC_DIR)/unistd/write.c \
-	$(USER_LIBC_DIR)/stdio/streams.c \
+	$(USER_LIBC_DIR)/unistd/read.c \
+	$(USER_LIBC_DIR)/unistd/close.c \
+	$(USER_LIBC_DIR)/unistd/lseek.c \
+	$(USER_LIBC_DIR)/unistd/readline.c \
+	$(USER_LIBC_DIR)/unistd/execl.c \
+	$(USER_LIBC_DIR)/fcntl/creat.c \
+	$(USER_LIBC_DIR)/fcntl/open.c \
+	$(USER_LIBC_DIR)/dirent/posix_getdents.c \
 
-# User programs
-# To add a new program: append its source path here.
-# The makefile auto-generates the incbin ASM and k_install C code.
+# sys/sys/stat/mkdir.c compiled under a unique object name to avoid collision
+# with bin/mkdir/mkdir.c (both would become mkdir.o via notdir).
+SYS_STAT_MKDIR_OBJ = $(USER_OBJ_DIR)/sys_stat_mkdir.o
 
+# sh builtins: compiled together into one ELF
+SH_SRCS = \
+	$(CMD_DIR)/sh.c \
+	$(CMD_DIR)/cd.c \
+	$(CMD_DIR)/clear.c \
+	$(CMD_DIR)/touch.c \
+
+SH_OBJS = $(addprefix $(USER_OBJ_DIR)/, $(notdir $(SH_SRCS:.c=.o)))
+
+# User programs: sh is excluded, has its own rule below
 USER_PROG_SRCS = \
-	bin/hello/hello.c \
+	bin/cat/cat.c \
+	bin/vi/vi.c \
+	bin/ls/ls.c \
+	bin/mkdir/mkdir.c \
 
-USER_PROGS = $(patsubst %.c,$(USER_OBJ_DIR)/%.elf,$(notdir $(USER_PROG_SRCS)))
+USER_PROGS = \
+	$(patsubst %.c,$(USER_OBJ_DIR)/%.elf,$(notdir $(USER_PROG_SRCS))) \
+	$(USER_OBJ_DIR)/sh.elf \
 
 # Output names
-ELF   = kernel.elf
-BIN   = kernel.bin
-ISO   = os-bios.iso
+ELF   = sys/kernel.elf
+BIN   = sys/kernel.bin
+ISO   = sys/xnix.iso
 LIBC  = $(LIB_DIR)/libc.a
 ULIBC = $(USER_OBJ_DIR)/libc.a
 
@@ -140,8 +181,8 @@ QEMUFLAGS = -m 2G -boot d \
             -d int,cpu_reset -no-reboot
 
 # Object paths
-KERN_OBJS = $(addprefix $(OBJ_DIR)/, $(notdir $(SRC:.c=.o)))
-LIBC_OBJS = $(addprefix $(OBJ_DIR)/, $(notdir $(LIBC_SRC:.c=.o)))
+KERN_OBJS      = $(addprefix $(OBJ_DIR)/, $(notdir $(SRC:.c=.o)))
+LIBC_OBJS      = $(addprefix $(OBJ_DIR)/, $(notdir $(LIBC_SRC:.c=.o)))
 USER_LIBC_OBJS = $(addprefix $(USER_OBJ_DIR)/, $(notdir $(USER_LIBC_SRC:.c=.o)))
 
 # Targets
@@ -160,10 +201,7 @@ $(foreach src,$(LIBC_SRC),$(eval $(call libc_rule,$(src))))
 $(LIBC): $(LIBC_OBJS) | $(OBJ_DIR)
 	$(AR) rcs $@ $^
 
-# Auto-generate user_progs.asm and user_progs.c
-# user_progs.asm : one incbin per ELF, exports name_start/name_end symbols
-# user_progs.c   : calls k_install for every program at boot
-# Both are regenerated whenever USER_PROGS changes.
+# Auto-generate user_progs.asm and user_progs.c, a bit hacky...
 $(OBJ_DIR)/user_progs.asm: $(USER_PROGS) | $(OBJ_DIR)
 	@echo "section .rodata" > $@
 	@$(foreach elf,$^, \
@@ -183,7 +221,7 @@ $(OBJ_DIR)/user_progs.c: $(USER_PROGS) | $(OBJ_DIR)
 	@echo "void install_user_progs(void) {" >> $@
 	@$(foreach elf,$^, \
 		name=$(basename $(notdir $(elf))); \
-		echo "    k_install(\"$${name}\", $${name}_start, (uint32_t)($${name}_end - $${name}_start));" >> $@; \
+		echo "    vfs_register_file(\"$${name}\", $${name}_start, (uint32_t)($${name}_end - $${name}_start));" >> $@; \
 	)
 	@echo "}" >> $@
 
@@ -201,7 +239,7 @@ endef
 
 $(foreach src,$(SRC),$(eval $(call kern_rule,$(src))))
 
-$(OBJ_DIR)/entry.o: entry.asm | $(OBJ_DIR)
+$(OBJ_DIR)/entry.o: $(SYS_DIR)/entry.asm | $(OBJ_DIR)
 	$(AS) $(ASFLAGS) $< -o $@
 
 # Kernel ELF
@@ -229,7 +267,11 @@ endef
 
 $(foreach src,$(USER_LIBC_SRC),$(eval $(call user_libc_rule,$(src))))
 
-$(ULIBC): $(USER_LIBC_OBJS) | $(USER_OBJ_DIR)
+# Explicit rule for sys/sys/stat/mkdir.c under its unique object name
+$(SYS_STAT_MKDIR_OBJ): $(SYS_DIR)/sys/stat/mkdir.c | $(USER_OBJ_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(ULIBC): $(USER_LIBC_OBJS) $(SYS_STAT_MKDIR_OBJ) | $(USER_OBJ_DIR)
 	$(AR) rcs $@ $^
 
 # crt0
@@ -243,11 +285,28 @@ $(USER_OBJ_DIR)/$(notdir $(1:.c=.elf)): $(1) $(ULIBC) $(USER_OBJ_DIR)/crt0.o | $
 	$(LD) $(USER_LDFLAGS) \
 		$(USER_OBJ_DIR)/crt0.o \
 		$(USER_LIBC_OBJS) \
+		$(SYS_STAT_MKDIR_OBJ) \
 		$(USER_OBJ_DIR)/$(notdir $(1:.c=.o)) \
 		-o $$@
 endef
 
 $(foreach src,$(USER_PROG_SRCS),$(eval $(call user_prog_rule,$(src))))
+
+# sh — multi-source, compile each file then link together
+define sh_rule
+$(USER_OBJ_DIR)/$(notdir $(1:.c=.o)): $(1) | $(USER_OBJ_DIR)
+	$(CC) $(USER_CFLAGS) -c $$< -o $$@
+endef
+
+$(foreach src,$(SH_SRCS),$(eval $(call sh_rule,$(src))))
+
+$(USER_OBJ_DIR)/sh.elf: $(SH_OBJS) $(ULIBC) $(USER_OBJ_DIR)/crt0.o | $(USER_OBJ_DIR)
+	$(LD) $(USER_LDFLAGS) \
+		$(USER_OBJ_DIR)/crt0.o \
+		$(USER_LIBC_OBJS) \
+		$(SYS_STAT_MKDIR_OBJ) \
+		$(SH_OBJS) \
+		-o $@
 
 user: $(USER_PROGS)
 

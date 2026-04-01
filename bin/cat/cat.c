@@ -1,31 +1,28 @@
-/* TODO: move this out of kernel and into a userspace prog */
-#include "commands.h"
-#include "vfs.h"
 #include "stdio.h"
 
-extern void terminal_write(const char*);
-extern vnode_t* current_dir;
-vnode_t* vfs_lookup(const char* path);
-
-int cmd_cat(int argc, char** argv) {
+int main(int argc, char** argv) {
     if (argc < 2) {
-        // POSIX complaint cat should read from stdin if file is not present
         printf("Usage: cat <file>\n");
         return -1;
     }
 
-    vnode_t* file;
+    char buf[256];
+    char **pptr = argv;
 
-    char **pptr = argv; // path ptr
-    for(++pptr; --argc; pptr++){
-        file = vfs_lookup(argv[1]);
-        if (!file || !(file->flags & VFS_FILE)) {
+    for (++pptr; --argc; pptr++) {
+        FILE* f = fopen(*pptr, "r");
+        if (!f) {
             printf("cat: %s: No such file or directory\n", *pptr);
             return -1;
         }
-        if (file->content) {
-            printf("%s\n", file->content);
+
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
+            buf[n] = '\0';
+            printf("%s", buf);
         }
+        fclose(f);
     }
+
     return 0;
 }

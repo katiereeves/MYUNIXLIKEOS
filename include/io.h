@@ -37,4 +37,6 @@ void terminal_backspace(void);
 
 void terminal_write(const char* s);
 
+void terminal_clear_line(int row);
+
 #endif

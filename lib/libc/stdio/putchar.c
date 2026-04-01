@@ -1,17 +1,9 @@
-/* Subject to change after file streams.
- * Standard implementation below.
- */
+/* Subject to change */
 
 #include "stdio.h"
 #include "stddef.h"
 
 extern void terminal_putc(char);
-/*
-int putchar(int c){
-    terminal_putc((char)c);
-    return c;
-}
-*/
 
 int putchar(int c){
     FILE *fp = NULL;

@@ -1,20 +1,20 @@
 /* TODO:
- * - Move more things out of here.
- * - Move keyboard drivers to a seperate file.
- */
+ - Move more things out of here. 
+ - Create scheduler...
+*/
 #include "stdint.h"
 #include "stddef.h"
 #include "stdbool.h"
 #include "vfs.h"
 #include "pmm.h"
 #include "io.h"
-#include "commands.h"
 #include "string.h"
 #include "stdio.h"
 #include "sys/syscall.h"
 #include "idt.h"
 #include "gdt.h"
 #include "sys/time.h"
+#include "unistd.h"
 
 char fs_type_name[16] = "Ext2";
 
@@ -121,13 +121,13 @@ FILE *stdin  = &_stdin_f;
 extern uint32_t stack_top;
 extern void install_user_progs();
 
-void kernel_main(void) {
+void kernel_main() {
     pmm_init(NULL);
-    fs_init();
+    vfs_init();
     idt_init();
     gdt_init();
 
-    /* set TSS esp0 to top of kernel stack — stable for all ring 3 syscalls */
+    /* set TSS esp0 to top of kernel stack */
     tss_set_kernel_stack((uint32_t)&stack_top);
 
     install_user_progs();
@@ -146,5 +146,7 @@ void kernel_main(void) {
     localtime_r(&t, &bt);
     printf("%s %s %i:%i %i UTC\n", days[bt.tm_wday],
         months[bt.tm_mon], bt.tm_hour, bt.tm_min, bt.tm_year);
-    sh();
+
+    /* start shell */
+    execl("sh");
 }

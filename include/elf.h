@@ -54,5 +54,6 @@ int elf_validate(const uint8_t *data, size_t size);
 
 /* Loads all PT_LOAD segments and returns entry point, or 0 on failure */
 uint32_t elf_load(const uint8_t *data, size_t size);
+int elf_exec(const char *path, const char **argv);
 
 #endif

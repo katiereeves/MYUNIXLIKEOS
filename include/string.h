@@ -27,5 +27,6 @@ size_t   strspn(const char *, const char *);
 char    *strstr(const char *, const char *);
 char    *strtok(char *restrict, const char *restrict);
 size_t   strxfrm(char *restrict, const char *restrict, size_t);
+void    *memmove(void *s1, const void *s2, size_t n);
 
 #endif /* string.h */

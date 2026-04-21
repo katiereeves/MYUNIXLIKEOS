@@ -8,6 +8,7 @@ PHDRS {
 
 SECTIONS {
     . = 0x00100000;
+    _kernel_start = .;
     .text : {
         *(.multiboot2_header)
         *(.text*)
@@ -15,4 +16,5 @@ SECTIONS {
     .rodata : { *(.rodata*) } :rodata
     .data : { *(.data*) } :data
     .bss : { *(COMMON) *(.bss*) } :data
+    _kernel_end = .;
 }

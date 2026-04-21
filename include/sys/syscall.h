@@ -4,6 +4,16 @@
 #define _SYSCALL_H_
 
 #include "stdarg.h"
+#include "stdint.h"
+
+struct trapframe {
+    uint32_t gs, fs, es, ds;
+    uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
+    uint32_t trapno, err_code;
+    uint32_t eip, cs, eflags;
+    uint32_t useresp;
+    uint32_t ss;
+} __attribute__((packed));
 
 /* files and io */
 #define SYS_read           0x0000   /* for: read(fd, buf, count) - returns: bytes read */
@@ -43,9 +53,15 @@
 #define SYS_getdents       0x0021   /* for: getdents(fd, buf, count) - returns: bytes read. */
 /* time */
 #define SYS_clock_gettime  0x0022   /* for: clock_gettime(clockid, timespec) - returns: 0 on success */
-/* unistd */
+/* procs */
 #define SYS_execl          0x0023   /* for: int execl(const char *path, const char *arg0, ...) */
 #define SYS_exit           0x0024   /* for: exit(int ret) */
+#define SYS_fork           0x0025   /* for: fork(void) */
+#define SYS_wait           0x0026   /* for: wait() */
+#define SYS_sched_yield    0x0027   /* for yield() */
+/* memory */
+#define SYS_brk            0x0028   /* for: sbrk(intptr_t incr) */
+#define SYS_sbrk           0x0029   /* for: sbrk(intptr_t incr) */
 
 /*
  * Usage is sort of unintuitive:

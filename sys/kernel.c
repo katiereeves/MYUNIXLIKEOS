@@ -1,11 +1,11 @@
 /* TODO:
- - Move more things out of here. 
- - Create scheduler...
+ - Move more things out of here.
 */
 #include "stdint.h"
 #include "stddef.h"
 #include "stdbool.h"
 #include "vfs.h"
+#include "page.h"
 #include "pmm.h"
 #include "io.h"
 #include "string.h"
@@ -15,70 +15,24 @@
 #include "gdt.h"
 #include "sys/time.h"
 #include "unistd.h"
-
-char fs_type_name[16] = "Ext2";
-
-#define MAX_PAGES 128
-static uint8_t pmm_bitmap[MAX_PAGES / 8];
-static uint8_t pmm_page_pool[MAX_PAGES][PAGE_SIZE];
-
-void bitmap_set(uint64_t bit) {
-    if (bit >= MAX_PAGES) return;
-    pmm_bitmap[bit / 8] |= (1 << (bit % 8));
-}
-
-void bitmap_clear(uint64_t bit) {
-    if (bit >= MAX_PAGES) return;
-    pmm_bitmap[bit / 8] &= ~(1 << (bit % 8));
-}
-
-int bitmap_test(uint64_t bit) {
-    if (bit >= MAX_PAGES) return 0;
-    return (pmm_bitmap[bit / 8] >> (bit % 8)) & 1;
-}
-
-void pmm_init(void* mmap_tag) {
-    (void)mmap_tag;
-    for (size_t i = 0; i < sizeof(pmm_bitmap); i++) pmm_bitmap[i] = 0;
-}
-
-void* pmm_alloc_page(void) {
-    for (uint64_t i = 0; i < MAX_PAGES; i++) {
-        if (!bitmap_test(i)) {
-            bitmap_set(i);
-            return pmm_page_pool[i];
-        }
-    }
-    return NULL;
-}
-
-void pmm_free_page(void* ptr) {
-    if (!ptr) return;
-    uintptr_t base = (uintptr_t)pmm_page_pool;
-    uintptr_t cur  = (uintptr_t)ptr;
-    if (cur < base) return;
-    uint64_t idx = (cur - base) / PAGE_SIZE;
-    if (idx < MAX_PAGES) bitmap_clear(idx);
-}
-
-void* pmm_alloc_blocks(size_t count) {
-    if (count == 0) return NULL;
-    return pmm_alloc_page();
-}
-
-void* pmm_alloc_z(size_t size) {
-    void* p = pmm_alloc_page();
-    if (!p) return NULL;
-    size_t n = size < PAGE_SIZE ? size : PAGE_SIZE;
-    for (size_t i = 0; i < n; i++) ((uint8_t*)p)[i] = 0;
-    return p;
-}
-
-/* kernel space streams */
+#include "sys/proc/proc.h"
+#include "sys/sched/sched.h"
+#include "multiboot.h"
 
 static unsigned char _stdout_buf[2048];
 static unsigned char _stderr_buf[256];
 static unsigned char _stdin_buf[256];
+
+static FILE _stdin_f = {
+    .flags  = 0,
+    .fileno = 0,
+    .buf    = _stdin_buf,
+    .bptr   = _stdin_buf,
+    .len    = sizeof(_stdin_buf),
+    .free   = 0,
+    .iobf   = _IOLBF,
+    .eof    = 0,
+};
 
 static FILE _stdout_f = {
     .flags  = 1,
@@ -102,39 +56,49 @@ static FILE _stderr_f = {
     .eof    = 0,
 };
 
-static FILE _stdin_f = {
-    .flags  = 0,
-    .fileno = 0,
-    .buf    = _stdin_buf,
-    .bptr   = _stdin_buf,
-    .len    = sizeof(_stdin_buf),
-    .free   = 0,
-    .iobf   = _IOLBF,
-    .eof    = 0,
-};
-
 FILE *stdout = &_stdout_f;
 FILE *stderr = &_stderr_f;
 FILE *stdin  = &_stdin_f;
 
-/* stack_top is defined in entry.asm */
 extern uint32_t stack_top;
-extern void install_user_progs();
+extern void install_user_progs(void);
+extern void irq0_handler(void);
+extern struct proc *run_queue_head;
+extern void jump_usermode(uint32_t entry, uint32_t user_stack);
 
-void kernel_main() {
-    pmm_init(NULL);
-    vfs_init();
-    idt_init();
+void kernel_main(uint32_t magic, uint32_t mb_addr) {
+    __asm__ volatile("cli");
+
+    if (magic != 0x36D76289) {
+        __asm__ volatile("cli; hlt");
+    }
+
+    void *mmap_tag = NULL;
+    struct multiboot_tag *tag =
+        (struct multiboot_tag *)(mb_addr + 8);
+
+    while (tag->type != MULTIBOOT_TAG_TYPE_END) {
+        if (tag->type == MULTIBOOT_TAG_TYPE_MMAP) {
+            mmap_tag = tag;
+            break;
+        }
+        tag = (struct multiboot_tag *)
+            ((uint8_t *)tag + ((tag->size + 7) & ~7u));
+    }
+
+    pmm_init(mmap_tag);
     gdt_init();
+        
+    idt_init();
+    page_init();
+    set_idt_gate(32, irq0_handler, 0x8E);
 
-    /* set TSS esp0 to top of kernel stack */
     tss_set_kernel_stack((uint32_t)&stack_top);
-
+    vfs_init();
     install_user_progs();
 
     printf("*nix IA-32 Kernel booted\n");
 
-    /* TODO: strftime */
     time_t t;
     time(&t);
     struct tm bt;
@@ -147,6 +111,18 @@ void kernel_main() {
     printf("%s %s %i:%i %i UTC\n", days[bt.tm_wday],
         months[bt.tm_mon], bt.tm_hour, bt.tm_min, bt.tm_year);
 
-    /* start shell */
-    execl("sh");
+    struct proc *sh = proc_from_elf("sh");
+
+    sched_enqueue(sh);
+    current_proc          = run_queue_head;
+    current_proc->p_state = PROC_RUNNING;
+
+    switch_page_dir(current_proc->p_page_dir);
+    tss_set_kernel_stack(current_proc->p_kernel_stack);
+
+    sched_init(1000);
+
+    outb(0x21, 0xFE);
+
+    jump_usermode(current_proc->p_ctx.eip, current_proc->p_ctx.useresp);
 }

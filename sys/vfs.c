@@ -1,5 +1,6 @@
 #include "vfs.h"
 #include "string.h"
+#include "page.h"
 #include "pmm.h"
 #include "stdio.h"
 #include "elf.h"
@@ -21,9 +22,10 @@ static struct {
 } fd_table[VFS_MAX_FDS];
 
 static int alloc_fd(void) {
-    for (int i = 3; i < VFS_MAX_FDS; i++) {
-        if (!fd_table[i].in_use) return i;
-    }
+    for (int i = 3; i < VFS_MAX_FDS; i++)
+        if (!fd_table[i].in_use)
+            return i;
+
     return -1;
 }
 
@@ -35,7 +37,8 @@ static vnode_t* alloc_vnode(void) {
     n->parent      = NULL;
     n->child_count = 0;
     n->content     = NULL;
-    for (int i = 0; i < 16; i++) n->children[i] = NULL;
+    for (int i = 0; i < 16; i++)
+        n->children[i] = NULL;
     return n;
 }
 
@@ -60,10 +63,13 @@ void vfs_init(void) {
 }
 
 vnode_t* vfs_lookup(const char* path) {
-    if (!path || !*path) return NULL;
-    if (strcmp(path, "/")  == 0) return vfs_root;
-    if (strcmp(path, ".")  == 0) return current_dir;
-    if (strcmp(path, "..") == 0)
+    if (!path || !*path)
+        return NULL;
+    if (!strcmp(path, "/"))
+        return vfs_root;
+    if (!strcmp(path, "."))
+        return current_dir;
+    if (!strcmp(path, ".."))
         return current_dir->parent ? current_dir->parent : current_dir;
 
     const char* name = (*path == '/') ? path + 1 : path;
@@ -75,12 +81,25 @@ vnode_t* vfs_lookup(const char* path) {
 }
 
 int vfs_mkdir(const char* path) {
-    if (!path || !*path) { printf("mkdir: missing name\n"); return -1; }
-    if (!current_dir) return -1;
-    if (current_dir->child_count >= 16) { printf("mkdir: directory full\n"); return -1; }
-    if (vfs_lookup(path)) { printf("mkdir: already exists\n"); return -1; }
+    if (!path || !*path) {
+        printf("mkdir: missing name\n");
+        return -1;
+    }
+    if (!current_dir)
+        return -1;
+    if (current_dir->child_count >= 16) {
+        printf("mkdir: directory full\n");
+        return -1;
+    }
+    if (vfs_lookup(path)) {
+        printf("mkdir: already exists\n");
+        return -1;
+    }
     vnode_t* node = alloc_vnode();
-    if (!node) { printf("mkdir: out of nodes\n"); return -1; }
+    if (!node) {
+        printf("mkdir: out of nodes\n");
+        return -1;
+    }
     strcpy(node->name, path);
     node->flags       = VFS_DIRECTORY;
     node->parent      = current_dir;
@@ -91,18 +110,32 @@ int vfs_mkdir(const char* path) {
 }
 
 int vfs_create(const char* path) {
-    if (!path || !*path) { printf("touch: missing name\n"); return -1; }
-    if (!current_dir) return -1;
-    if (current_dir->child_count >= 16) { printf("touch: directory full\n"); return -1; }
-    if (vfs_lookup(path)) { printf("touch: already exists\n"); return -1; }
+    if (!path || !*path) {
+        printf("touch: missing name\n");
+        return -1;
+    }
+    if (!current_dir)
+        return -1;
+    if (current_dir->child_count >= 16) {
+        printf("touch: directory full\n");
+        return -1;
+    }
+    if (vfs_lookup(path)) {
+        printf("touch: already exists\n");
+        return -1;
+    }
     vnode_t* node = alloc_vnode();
-    if (!node) { printf("touch: out of nodes\n"); return -1; }
+    if (!node) {
+        printf("touch: out of nodes\n");
+        return -1;
+    }
     strcpy(node->name, path);
     node->flags       = VFS_FILE;
     node->parent      = current_dir;
     node->child_count = 0;
     node->content     = (char*)pmm_alloc_z(64);
-    if (node->content) node->content[0] = '\0';
+    if (node->content)
+        node->content[0] = '\0';
     current_dir->children[current_dir->child_count++] = node;
     return 0;
 }
@@ -113,16 +146,20 @@ int vfs_open(const char* path, int flags) {
     vnode_t* node = vfs_lookup(path);
 
     if (!node) {
-        if (!(flags & O_CREAT)) return -1;
-        if (current_dir->child_count >= 16) return -1;
+        if (!(flags & O_CREAT))
+            return -1;
+        if (current_dir->child_count >= 16)
+            return -1;
         node = alloc_vnode();
-        if (!node) return -1;
+        if (!node)
+            return -1;
         strcpy(node->name, path);
         node->flags   = VFS_FILE;
         node->parent  = current_dir;
         node->size    = 0;
         node->content = (char*)pmm_alloc_z(4096);
-        if (node->content) node->content[0] = '\0';
+        if (node->content)
+            node->content[0] = '\0';
         current_dir->children[current_dir->child_count++] = node;
     }
 
@@ -146,11 +183,41 @@ int vfs_open(const char* path, int flags) {
     return fd;
 }
 
+int vfs_lseek(int fd, uint32_t offset, int whence) {
+    int size = vfs_fd_size(fd);
+    if (size < 0) return -1;
+
+    int cur = vfs_fd_offset(fd);
+    int newoff;
+
+    switch (whence) {
+    case SEEK_SET:
+        newoff = (int)offset;
+        break;
+    case SEEK_CUR:
+        newoff = cur + (int)offset;
+        break;
+    case SEEK_END:
+        newoff = size + (int)offset;
+        break;
+    default:
+        return -1;
+    }
+
+    if (newoff < 0 || newoff > size)
+        return -1;
+    vfs_fd_set_offset(fd, (uint32_t)newoff);
+    return newoff;
+}
+
 int vfs_register_file(const char* name, const uint8_t* data, uint32_t size) {
-    if (!name || !data || !size) return -1;
-    if (vfs_root->child_count >= 16) return -1;
+    if (!name || !data || !size)
+        return -1;
+    if (vfs_root->child_count >= 16)
+        return -1;
     vnode_t* node = alloc_vnode();
-    if (!node) return -1;
+    if (!node)
+        return -1;
     strcpy(node->name, name);
     node->flags   = VFS_FILE;
     node->parent  = vfs_root;
@@ -161,26 +228,33 @@ int vfs_register_file(const char* name, const uint8_t* data, uint32_t size) {
 }
 
 int vfs_fd_offset(int fd) {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return -1;
     return (int)fd_table[fd].offset;
 }
 
 int vfs_fd_size(int fd) {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use) return -1;
-    if (!fd_table[fd].vnode) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return -1;
+    if (!fd_table[fd].vnode)
+        return -1;
     return (int)fd_table[fd].vnode->size;
 }
 
 void* vfs_fd_content(int fd) {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use) return NULL;
-    if (!fd_table[fd].vnode) return NULL;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return NULL;
+    if (!fd_table[fd].vnode)
+        return NULL;
     return fd_table[fd].vnode->content;
 }
 
 ssize_t vfs_read(int fd, void* buf, size_t nbyte) {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return -1;
     vnode_t* v = fd_table[fd].vnode;
-    if (!v || !v->content) return -1;
+    if (!v || !v->content)
+        return -1;
 
     size_t avail = v->size > fd_table[fd].offset
                  ? v->size - fd_table[fd].offset : 0;
@@ -191,38 +265,47 @@ ssize_t vfs_read(int fd, void* buf, size_t nbyte) {
 }
 
 ssize_t vfs_write(int fd, const void* buf, size_t nbyte) {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return -1;
     vnode_t* v = fd_table[fd].vnode;
-    if (!v || !v->content) return -1;
-    if (fd_table[fd].flags & O_RDONLY) return -1;
+    if (!v || !v->content)
+        return -1;
+    if (fd_table[fd].flags & O_RDONLY)
+        return -1;
 
     /* 4096-byte buffer */
     size_t avail = 4096 > fd_table[fd].offset ? 4096 - fd_table[fd].offset : 0;
     size_t n = nbyte < avail ? nbyte : avail;
     memcpy(v->content + fd_table[fd].offset, buf, n);
     fd_table[fd].offset += n;
-    if (fd_table[fd].offset > v->size) v->size = fd_table[fd].offset;
+    if (fd_table[fd].offset > v->size)
+        v->size = fd_table[fd].offset;
     return (ssize_t)n;
 }
 
 int vfs_close(int fd) {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return -1;
     fd_table[fd].in_use = 0;
     fd_table[fd].vnode  = NULL;
     return 0;
 }
 
 int vfs_fd_set_offset(int fd, uint32_t offset) {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return -1;
     fd_table[fd].offset = offset;
     return 0;
 }
 
 ssize_t vfs_getdents(int fd, void *buf, size_t nbyte) {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use) return -1;
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return -1;
     vnode_t *dir = fd_table[fd].vnode;
-    if (!dir || !(dir->flags & VFS_DIRECTORY)) return -1;
-    if (nbyte < sizeof(struct posix_dent)) return -1;
+    if (!dir || !(dir->flags & VFS_DIRECTORY))
+        return -1;
+    if (nbyte < sizeof(struct posix_dent))
+        return -1;
 
     struct posix_dent *d      = (struct posix_dent *)buf;
     uint32_t           off    = fd_table[fd].offset;

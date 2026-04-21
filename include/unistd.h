@@ -6,5 +6,6 @@
 ssize_t write(int fildes, const void *buf, size_t nbyte);
 int execl(const char *path, ...);
 ssize_t readline(char *buf, size_t n);
+pid_t fork(void);
 
 #endif /* unistd.h */

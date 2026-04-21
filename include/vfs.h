@@ -47,11 +47,12 @@ void     vfs_init(void);
 vnode_t* vfs_lookup(const char* path);
 int      vfs_mkdir(const char* path);
 int      vfs_create(const char* path);
-int vfs_open(const char* path, int flags);
+int      vfs_open(const char* path, int flags);
 int      vfs_close(int fd);
 ssize_t  vfs_read(int fd, void* buf, size_t nbyte);
 ssize_t  vfs_write(int fd, const void* buf, size_t nbyte);
-int vfs_fd_set_offset(int fd, uint32_t offset);
-ssize_t vfs_getdents(int fd, void *buf, size_t nbyte);
+int      vfs_fd_set_offset(int fd, uint32_t offset);
+ssize_t  vfs_getdents(int fd, void *buf, size_t nbyte);
+int      vfs_lseek(int fd, uint32_t offset, int whence);
 
-#endif
+#endif /* vfs.h */

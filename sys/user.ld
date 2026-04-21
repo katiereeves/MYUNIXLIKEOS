@@ -2,17 +2,15 @@
 
 ENTRY(_start)
 
-/* Explicit program headers */
 PHDRS {
     text PT_LOAD FLAGS(5);   /* R+X */
     data PT_LOAD FLAGS(6);   /* R+W */
 }
 
 SECTIONS {
-    /* Start .text @ 0x08049000. */
-    . = 0x08049000;
+    . = 0x00200000;
 
-    .text   : { *(.text .text.*)   } :text
+    .text   : { *(.text .text.*)     } :text
     .rodata : { *(.rodata .rodata.*) } :text
 
     . = ALIGN(0x1000);

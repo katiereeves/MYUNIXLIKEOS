@@ -1,13 +1,13 @@
 # TODO: Create individual Makefiles per directory and invoke from here
 
 .SUFFIXES:
-
+ 
 AS      = nasm
 CC      = i686-elf-gcc
 LD      = i686-elf-ld
 AR      = i686-elf-ar
 OBJCOPY = i686-elf-objcopy
-
+ 
 GRUB_RESCUE := $(shell \
 	if command -v i686-elf-grub-mkrescue >/dev/null 2>&1; then \
 		echo i686-elf-grub-mkrescue; \
@@ -59,6 +59,10 @@ SRC = \
 	$(SYS_DIR)/gdt.c \
 	$(SYS_DIR)/syscall.c \
 	$(SYS_DIR)/elf.c \
+	$(SYS_DIR)/sys/proc/proc.c \
+	$(SYS_DIR)/sys/paging/paging.c \
+	$(SYS_DIR)/sys/pmm/pmm.c \
+	$(SYS_DIR)/sys/sched/sched.c \
 	$(SYS_DIR)/sys/time/time.c \
 	$(SYS_DIR)/sys/time/localtime_r.c \
 	$(DRVR_INP_DIR)/pskey.c \
@@ -106,7 +110,13 @@ FCNTL_SRC = \
 SYS_STAT_SRC = \
 	$(SYS_DIR)/sys/stat/mkdir.c \
 
-LIBC_SRC  = $(STDIO_SRC) $(STRING_SRC) $(FCNTL_SRC) $(UNISTD_SRC) $(SYS_STAT_SRC)
+WAIT_SRC = \
+	$(SYS_DIR)/sys/wait/wait.c \
+
+SCHED_SRC = \
+	$(LIBC_DIR)/sched/sched_yeild.c \
+
+LIBC_SRC  = $(STDIO_SRC) $(STRING_SRC) $(FCNTL_SRC) $(UNISTD_SRC) $(SYS_STAT_SRC) $(SCHED_SRC) $(WAIT_SRC)
 
 # Userspace libc sources
 # NOTE: sys/sys/stat/mkdir.c is intentionally excluded here — it is compiled
@@ -139,9 +149,11 @@ USER_LIBC_SRC = \
 	$(USER_LIBC_DIR)/unistd/lseek.c \
 	$(USER_LIBC_DIR)/unistd/readline.c \
 	$(USER_LIBC_DIR)/unistd/execl.c \
+	$(USER_LIBC_DIR)/unistd/fork.c \
 	$(USER_LIBC_DIR)/fcntl/creat.c \
 	$(USER_LIBC_DIR)/fcntl/open.c \
 	$(USER_LIBC_DIR)/dirent/posix_getdents.c \
+	$(LIBC_DIR)/sched/sched_yeild.c \
 
 # sys/sys/stat/mkdir.c compiled under a unique object name to avoid collision
 # with bin/mkdir/mkdir.c (both would become mkdir.o via notdir).
@@ -162,6 +174,8 @@ USER_PROG_SRCS = \
 	bin/vi/vi.c \
 	bin/ls/ls.c \
 	bin/mkdir/mkdir.c \
+	bin/segfault/segfault.c \
+	bin/forktest/forktest.c \
 
 USER_PROGS = \
 	$(patsubst %.c,$(USER_OBJ_DIR)/%.elf,$(notdir $(USER_PROG_SRCS))) \
@@ -174,8 +188,8 @@ ISO   = sys/xnix.iso
 LIBC  = $(LIB_DIR)/libc.a
 ULIBC = $(USER_OBJ_DIR)/libc.a
 
-QEMU      = qemu-system-x86_64
-QEMUFLAGS = -m 2G -boot d \
+QEMU      = qemu-system-i386
+QEMUFLAGS = -m 32M -boot d \
             -drive file=$(ISO),format=raw,if=ide,media=cdrom \
             -serial mon:stdio \
             -d int,cpu_reset -no-reboot
@@ -255,7 +269,7 @@ $(ISO): $(ELF) $(BIN)
 	rm -rf $(ISO_DIR)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(ELF) $(ISO_DIR)/boot/kernel.elf
-	printf 'set timeout=5\nset default=0\nmenuentry "MYUNIXLIKEOS" {\n    multiboot2 /boot/kernel.elf\n    boot\n}\n' \
+	printf 'set timeout=5\nset default=0\nmenuentry "xnix" {\n    multiboot2 /boot/kernel.elf\n    boot\n}\n' \
 		> $(ISO_DIR)/boot/grub/grub.cfg
 	$(GRUB_RESCUE) -o $@ $(ISO_DIR)
 

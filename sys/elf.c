@@ -1,6 +1,7 @@
 #include "elf.h"
 #include "string.h"
 #include "stdio.h"
+#include "page.h"
 #include "pmm.h"
 #include "vfs.h"
 

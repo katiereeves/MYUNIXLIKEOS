@@ -17,10 +17,13 @@ void fault_handler(uint32_t trapno, uint32_t err) {
         "#DF", "??",  "#TS", "#NP", "#SS", "#GP", "#PF", "??",
         "#MF", "#AC", "#MC", "#XF"
     };
+    uint32_t cr2;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
     const char *name = trapno < 20 ? names[trapno] : "??";
-    printf("\nFAULT %s (int=0x%x) err=0x%x\n", name, trapno, err);
+    printf("\nFAULT %s (int=0x%x) err=0x%x cr2=0x%x\n",
+           name, trapno, err, cr2);
     printf("System halted.\n");
-    __asm__ volatile ("cli; hlt");
+    __asm__ volatile("cli; hlt");
 }
 
 void pic_remap(int offset1, int offset2) {

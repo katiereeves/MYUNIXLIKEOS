@@ -1,6 +1,8 @@
 /* TODO: possibly move table functions out of here soon... */
-#include <stdint.h>
-#include <stdio.h>
+#include "stdint.h"
+#include "stdio.h"
+#include "stdbool.h"
+#include "string.h"
 #include "sys/syscall.h"
 #include "fcntl.h"
 #include "vfs.h"
@@ -9,26 +11,92 @@
 #include "elf.h"
 #include "io.h"
 #include "unistd.h"
-
-/* syscall number: regs->eax
- * arg1: regs->ebx
- * arg2: regs->ecx
- * arg3: regs->edx
- * arg4: regs->esi
- * arg5: regs->edi
- */
-struct trapframe {
-    uint32_t gs, fs, es, ds;
-    uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
-    uint32_t trapno, err_code;
-    uint32_t eip, cs, eflags;
-} __attribute__((packed));
+#include "page.h"
+#include "pmm.h"
+#include "sys/proc/proc.h"
+#include "sys/sched/sched.h"
+#include "gdt.h"
 
 #define SYSCALL_TABLE_LENGTH(x) (sizeof(x) / sizeof((x)[0]))
 
 typedef void (*syscall_fn)(struct trapframe *);
 
-static void sys_mkdir(struct trapframe *regs){
+static void proc_build_resume_frame(struct proc *p) {
+    struct trapframe *ctx = &p->p_ctx;
+    uint32_t *ksp = (uint32_t *)p->p_kernel_stack;
+
+    *--ksp = ctx->ss;
+    *--ksp = ctx->useresp;
+    *--ksp = ctx->eflags | 0x200;
+    *--ksp = ctx->cs;
+    *--ksp = ctx->eip;
+    *--ksp = 0;
+    *--ksp = 0x20;
+    *--ksp = ctx->eax;
+    *--ksp = ctx->ecx;
+    *--ksp = ctx->edx;
+    *--ksp = ctx->ebx;
+    *--ksp = ctx->useresp;
+    *--ksp = ctx->ebp;
+    *--ksp = ctx->esi;
+    *--ksp = ctx->edi;
+    *--ksp = ctx->ds;
+    *--ksp = ctx->es;
+    *--ksp = ctx->fs;
+    *--ksp = ctx->gs;
+
+    p->p_ksp = (uint32_t)ksp;
+}
+
+static void voluntary_switch(struct trapframe *regs) {
+    tss_set_kernel_stack(current_proc->p_kernel_stack);
+    switch_page_dir(current_proc->p_page_dir);
+    current_proc->p_state = PROC_RUNNING;
+
+    *regs = current_proc->p_ctx;
+    regs->eflags |= 0x200;
+}
+
+static void pick_next(struct trapframe *regs) {
+    if (!run_queue_head) {
+        struct proc *sh = proc_from_elf("sh");
+        if (!sh) {
+            printf("shell failted to start: halting\n");
+            __asm__ volatile("cli; hlt");
+        }
+        sched_enqueue(sh);
+    }
+
+    struct proc *p    = run_queue_head;
+    struct proc *stop = p;
+    do {
+        if (p->p_state == PROC_READY) {
+            run_queue_head = p;
+            current_proc   = p;
+            voluntary_switch(regs);
+            return;
+        }
+        p = p->next;
+    } while (p != stop);
+}
+
+static void sys_sched_yield(struct trapframe *regs) {
+    if (!run_queue_head) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+
+    current_proc->p_ctx   = *regs;
+    current_proc->p_ksp   = (uint32_t)regs;
+    current_proc->p_state = PROC_READY;
+
+    run_queue_head = run_queue_head->next;
+
+    pick_next(regs);
+    regs->eax = 0;
+}
+
+static void sys_mkdir(struct trapframe *regs) {
     vfs_mkdir((const char *)regs->ebx);
 }
 
@@ -43,14 +111,24 @@ static void sys_open(struct trapframe *regs){
     regs->eax = (uint32_t)vfs_open(path, flags);
 }
 
-static void sys_close(struct trapframe *regs){
-    regs->eax = (uint32_t)vfs_close((int)regs->ebx);
+static void sys_close(struct trapframe *regs) {
+    int fd = (int)regs->ebx;
+    if (fd < 0 || fd >= VFS_MAX_FDS) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    regs->eax = (uint32_t)vfs_close(fd);
 }
 
-static void sys_read(struct trapframe *regs){
-    int fd          = (int)regs->ebx;
-    void *buf       = (void *)regs->ecx;
-    uint32_t count  = regs->edx;
+static void sys_read(struct trapframe *regs) {
+    int fd         = (int)regs->ebx;
+    void *buf      = (void *)regs->ecx;
+    uint32_t count = regs->edx;
+
+    if (fd < 0 || fd >= VFS_MAX_FDS) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
 
     if (fd == 0) {
         char *b = (char *)buf;
@@ -71,34 +149,12 @@ static void sys_getdents(struct trapframe *regs){
     );
 }
 
-static void sys_lseek(struct trapframe *regs){
-    int fd      = (int)regs->ebx;
-    long offset = (long)regs->ecx;
-    int whence  = (int)regs->edx;
-
-    int size = vfs_fd_size(fd);
-    if (size < 0) {
-        regs->eax = (uint32_t)-1;
-        return;
-    }
-
-    int cur = vfs_fd_offset(fd);
-    int newoff;
-
-    switch (whence) {
-        case SEEK_SET: newoff = (int)offset;        break;
-        case SEEK_CUR: newoff = cur + (int)offset;  break;
-        case SEEK_END: newoff = size + (int)offset; break;
-        default: regs->eax = (uint32_t)-1; return;
-    }
-
-    if (newoff < 0 || newoff > size) {
-        regs->eax = (uint32_t)-1;
-        return;
-    }
-
-    vfs_fd_set_offset(fd, (uint32_t)newoff);
-    regs->eax = (uint32_t)newoff;
+static void sys_lseek(struct trapframe *regs) {
+    regs->eax = (uint32_t)vfs_lseek(
+        (int)regs->ebx,
+        (long)regs->ecx,
+        (int)regs->edx
+    );
 }
 
 static void handle_ansi(const char *buf, uint32_t count, uint32_t *ip){
@@ -125,8 +181,7 @@ static void handle_ansi(const char *buf, uint32_t count, uint32_t *ip){
     char cmd = buf[i];
 
     switch (cmd) {
-        case 'H':
-        case 'f':
+        case 'H': case 'f':
             move_cursor(
                 params[1] > 0 ? params[1] - 1 : 0,
                 params[0] > 0 ? params[0] - 1 : 0
@@ -176,25 +231,22 @@ static void sys_write(struct trapframe *regs){
     if ((fd == 1 || fd == 2) && buf && count) {
         for (uint32_t i = 0; i < count; i++) {
             char c = buf[i];
-            if (c == '\033' && i + 1 < count && buf[i + 1] == '[') {
+            if (c == '\033' && i+1 < count && buf[i+1] == '[')
                 handle_ansi(buf, count, &i);
-            } else {
-                switch (c) {
-                    case '\b':
-                    case 0x7F: terminal_backspace(); break;
-                    default:   terminal_putc(c);     break;
-                }
-            }
+            else if (c == '\b' || c == 0x7F)
+                terminal_backspace();
+            else
+                terminal_putc(c);
         }
         regs->eax = count;
-    } else if (fd > 2 && buf && count) {
-        regs->eax = (uint32_t)vfs_write(fd, buf, count);
-    } else {
-        regs->eax = (uint32_t)-1;
     }
+    else if (fd > 2 && buf && count)
+        regs->eax = (uint32_t)vfs_write(fd, buf, count);
+    else
+        regs->eax = (uint32_t)-1;
 }
 
-#define IS_LEAP(y) (((y) % 4 == 0 && (y) % 100 != 0) || ((y) % 400 == 0))
+#define IS_LEAP(y) (((y)%4==0&&(y)%100!=0)||((y)%400==0))
 
 static void sys_clock_gettime(struct trapframe *regs){
     if (regs->ebx != CLOCK_REALTIME) {
@@ -233,16 +285,320 @@ static void sys_clock_gettime(struct trapframe *regs){
     regs->eax   = 0;
 }
 
-static void sys_execl(struct trapframe *regs){
-    regs->eax = (uint32_t)elf_exec(
-        (const char *)regs->ebx,
-        (const char **)regs->ecx
-    );
+static void sys_execl(struct trapframe *regs) {
+    const char  *path = (const char  *)regs->ebx;
+    const char **argv = (const char **)regs->ecx;
+
+    char     kbuf[1024];
+    uint32_t koff[16];
+    int      argc = 0;
+    char    *kp   = kbuf;
+
+    if (argv) {
+        while (argc < 15 && argv[argc]) {
+            size_t len = strlen(argv[argc]) + 1;
+            if (kp + len > kbuf + sizeof(kbuf)) break;
+            memcpy(kp, argv[argc], len);
+            koff[argc] = (uint32_t)(kp - kbuf);
+            kp += len; argc++;
+        }
+    }
+
+    struct proc *newp = proc_from_elf(path);
+    if (!newp) {
+        printf("exec: failed to load '%s'\n", path);
+        regs->eax=(uint32_t)-1;
+        return;
+    }
+
+    uint32_t new_pd   = newp->p_page_dir,  new_eip  = newp->p_ctx.eip;
+    uint32_t new_sb   = newp->p_stack_base,new_brk  = newp->p_brk;
+    uint32_t new_brkx = newp->p_brk_max,   new_kst  = newp->p_kernel_stack;
+    pmm_free_page(newp);
+
+    uint32_t *old_pd  = (uint32_t *)current_proc->p_page_dir;
+    uint32_t *kpd_ptr = get_kernel_page_dir();
+    for (int i = 0; i < 1024; i++) {
+        if (!(old_pd[i] & PAGE_PRESENT) || old_pd[i] == kpd_ptr[i])
+            continue;
+        uint32_t *pt = (uint32_t *)(old_pd[i] & ~0xFFFu);
+        for (int j = 0; j < 1024; j++)
+            if ((pt[j] & PAGE_PRESENT) && (pt[j] & PAGE_USER))
+                pmm_free_page((void*)(uintptr_t)(pt[j] & ~0xFFFu));
+        pmm_free_page(pt);
+    }
+    pmm_free_page(old_pd);
+    if (current_proc->p_kernel_stack)
+        pmm_free_page((void*)(current_proc->p_kernel_stack - PAGE_SIZE));
+
+    current_proc->p_page_dir     = new_pd;
+    current_proc->p_brk          = new_brk;
+    current_proc->p_brk_max      = new_brkx;
+    current_proc->p_stack_base   = new_sb;
+    current_proc->p_kernel_stack = new_kst;
+
+    tss_set_kernel_stack(new_kst);
+    switch_page_dir(new_pd);
+
+    uint8_t *strptr = (uint8_t *)new_sb;
+    uint32_t user_ptrs[16];
+    for (int i = argc-1; i >= 0; i--) {
+        size_t len = strlen(kbuf+koff[i])+1;
+        strptr -= len;
+        memcpy(strptr, kbuf+koff[i], len);
+        user_ptrs[i] = (uint32_t)strptr;
+    }
+    strptr = (uint8_t *)((uint32_t)strptr & ~3u);
+    uint32_t *frame = (uint32_t *)strptr;
+    frame--; *frame = 0;
+    for (int i = argc-1; i >= 0; i--) {
+        frame--;
+        *frame = user_ptrs[i];
+    }
+    frame--; *frame = (uint32_t)argc;
+
+    regs->eip     = new_eip;
+    regs->useresp = (uint32_t)frame;
+    regs->cs      = 0x1B;
+    regs->ss      = 0x23;
+    regs->ds      = 0x23;
+    regs->es      = 0x23;
+    regs->fs      = 0x23;
+    regs->gs      = 0x23;
+    regs->eflags  = 0x202;
+    regs->eax = regs->ebx = regs->ecx = 0;
+    regs->edx = regs->esi = regs->edi = regs->ebp = 0;
 }
 
-static void sys_exit(struct trapframe *regs){
-    /* just start shell for now */
-    elf_exec("sh", NULL);
+static void proc_free_address_space(struct proc *p) {
+    if (!p->p_page_dir)
+        return;
+ 
+    uint32_t *pd  = (uint32_t *)p->p_page_dir;
+    uint32_t *kpd = get_kernel_page_dir();
+ 
+    for (int i = 0; i < 1024; i++) {
+        if (!(pd[i] & PAGE_PRESENT))
+            continue;
+        if (pd[i] == kpd[i])
+            continue;
+ 
+        uint32_t *pt = (uint32_t *)(pd[i] & ~0xFFFu);
+        for (int j = 0; j < 1024; j++)
+            if ((pt[j] & PAGE_PRESENT) && (pt[j] & PAGE_USER))
+                pmm_free_page((void *)(uintptr_t)(pt[j] & ~0xFFFu));
+
+        pmm_free_page(pt);
+    }
+ 
+    pmm_free_page(pd);
+    p->p_page_dir = 0;
+}
+
+static void sys_exit(struct trapframe *regs) {
+    struct proc *p = current_proc;
+    p->p_exitcode  = (int)regs->ebx;
+ 
+    sched_dequeue(p);
+ 
+    struct proc *ch = p->child_head;
+    while (ch) {
+        struct proc *nx = ch->next_child;
+        if (ch->p_state == PROC_ZOMBIE) {
+            proc_free_address_space(ch);
+            sched_defer_free(ch);
+        } else
+            ch->parent = NULL;
+        ch = nx;
+    }
+    p->child_head = NULL;
+
+    struct proc *par = p->parent;
+    bool has_living_parent = par &&
+        par->p_state != PROC_DEAD &&
+        par->p_state != PROC_ZOMBIE;
+ 
+    if (has_living_parent) {
+        p->p_state = PROC_ZOMBIE;
+
+        if (par->p_state == PROC_WAITING) {
+            par->p_ctx.eax = (uint32_t)p->p_id;
+            proc_build_resume_frame(par);
+            sched_enqueue(par);
+        }
+
+        pick_next(regs);
+
+        proc_free_address_space(p);
+ 
+        if (p->p_kernel_stack) {
+            pmm_free_page((void *)(p->p_kernel_stack - PAGE_SIZE));
+            p->p_kernel_stack = 0;
+        }
+    }
+    else {
+        pick_next(regs);
+        proc_free_address_space(p);
+        sched_defer_free(p);
+    }
+}
+
+static void sys_wait(struct trapframe *regs) {
+    struct proc *p = current_proc;
+
+    for (;;) {
+        struct proc *zombie = NULL;
+        struct proc *prev   = NULL;
+        struct proc *curr   = p->child_head;
+
+        for (; curr; curr = curr->next_child) {
+            if (curr->p_state == PROC_ZOMBIE) {
+                zombie = curr;
+                break;
+            }
+            prev = curr;
+            
+        }
+
+        if (zombie) {
+            regs->eax = (uint32_t)zombie->p_id;
+
+            if (prev) prev->next_child = zombie->next_child;
+            else p->child_head = zombie->next_child;
+
+            sched_defer_free(zombie);
+            return;
+        }
+
+        p->p_state = PROC_WAITING;
+        p->p_ctx   = *regs; 
+        proc_build_resume_frame(p);
+        pick_next(regs);
+    }
+}
+
+static void sys_sbrk(struct trapframe *regs) {
+    int n = (int)regs->ebx;
+    struct proc *p = current_proc;
+    uint32_t old_brk = p->p_brk;
+    uint32_t new_brk = old_brk + n;
+    for (; new_brk > p->p_brk_max; p->p_brk_max += PAGE_SIZE) {
+        void *page = pmm_alloc_page();
+        if (!page) {
+            regs->eax = (uint32_t)-1;
+            return;
+        }
+        map_page((page_dir_entry_t *)p->p_page_dir,
+                 p->p_brk_max, (uint32_t)page,
+                 PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    }
+    p->p_brk  = new_brk;
+    regs->eax = old_brk;
+}
+
+static void sys_fork(struct trapframe *regs) {
+    struct proc *parent = current_proc;
+
+    struct proc *child = pmm_alloc_page();
+    if (!child) {
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    memset(child, 0, sizeof(struct proc));
+
+    static uint32_t next_pid = 2;
+    child->p_id = next_pid++;
+
+    uint32_t kstack = (uint32_t)pmm_alloc_page();
+    if (!kstack) { pmm_free_page(child); regs->eax = (uint32_t)-1; return; }
+    child->p_kernel_stack = kstack + PAGE_SIZE;
+
+    child->p_brk        = parent->p_brk;
+    child->p_brk_max    = parent->p_brk_max;
+    child->p_stack_base = parent->p_stack_base;
+    child->parent       = parent;
+    child->p_state      = PROC_READY;
+
+    child->p_ctx        = *regs;
+    child->p_ctx.eax    = 0;
+    child->p_ctx.cs     = 0x1B;
+    child->p_ctx.ss     = 0x23;
+    child->p_ctx.ds     = 0x23;
+    child->p_ctx.es     = 0x23;
+    child->p_ctx.fs     = 0x23;
+    child->p_ctx.gs     = 0x23;
+    child->p_ctx.eflags = regs->eflags | 0x200;
+
+    child->next_child  = parent->child_head;
+    parent->child_head = child;
+
+    proc_build_resume_frame(child);
+
+    uint32_t *parent_pd = (uint32_t *)parent->p_page_dir;
+    uint32_t *child_pd  = pmm_alloc_page();
+    if (!child_pd) {
+        pmm_free_page((void *)kstack);
+        pmm_free_page(child);
+        regs->eax = (uint32_t)-1;
+        return;
+    }
+    memset(child_pd, 0, PAGE_SIZE);
+
+    uint32_t *kpd   = get_kernel_page_dir();
+    int       ncopied = 0;
+
+    for (int i = 0; i < 1024; i++) {
+        if (parent_pd[i] == kpd[i]) {
+            child_pd[i] = parent_pd[i];
+            continue;
+        }
+        if (!(parent_pd[i] & PAGE_PRESENT))
+            continue;
+
+        uint32_t *ppt = (uint32_t *)(parent_pd[i] & ~0xFFFu);
+        uint32_t *cpt = pmm_alloc_page();
+        if (!cpt) {
+            printf("fork: OOM pt[%d], sharing\n", i);
+            child_pd[i] = parent_pd[i];
+            continue;
+        }
+        memset(cpt, 0, PAGE_SIZE);
+
+        for (int j = 0; j < 1024; j++) {
+            if (!(ppt[j] & PAGE_PRESENT))
+                continue;
+            if (!(ppt[j] & PAGE_USER)){
+                cpt[j] = ppt[j];
+                continue;
+            }
+
+            uint32_t paddr = ppt[j] & ~0xFFFu;
+            uint8_t *dest  = pmm_alloc_page();
+            if (!dest) {
+                printf("fork: OOM page copy, sharing\n");
+                cpt[j] = ppt[j];
+                continue;
+            }
+            memcpy(dest, (uint8_t *)paddr, PAGE_SIZE);
+            cpt[j] = ((uint32_t)dest) | (ppt[j] & 0xFFFu);
+            ncopied++;
+        }
+        child_pd[i] = ((uint32_t)cpt) | (parent_pd[i] & 0xFFFu);
+    }
+
+    child->p_page_dir = (uint32_t)child_pd;
+
+    for (int i = 0; i < 16; i++)
+        if (parent->p_files[i])
+            child->p_files[i] = parent->p_files[i];
+
+    if (!parent->p_kernel_stack) {
+        uint32_t pk = (uint32_t)pmm_alloc_page();
+        if (pk) parent->p_kernel_stack = pk + PAGE_SIZE;
+    }
+
+    regs->eax = child->p_id;
+    sched_enqueue(child);
 }
 
 static const syscall_fn syscall_table[] = {
@@ -256,9 +612,13 @@ static const syscall_fn syscall_table[] = {
     [SYS_clock_gettime] = sys_clock_gettime,
     [SYS_execl]         = sys_execl,
     [SYS_exit]          = sys_exit,
+    [SYS_wait]          = sys_wait,
+    [SYS_sched_yield]   = sys_sched_yield,
+    [SYS_fork]          = sys_fork,
+    [SYS_sbrk]          = sys_sbrk,
 };
 
-void syscall_handler(struct trapframe *regs){
+void syscall_handler(struct trapframe *regs) {
     uint32_t call = regs->eax;
     if (call < SYSCALL_TABLE_LENGTH(syscall_table) && syscall_table[call])
         syscall_table[call](regs);

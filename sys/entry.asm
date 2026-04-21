@@ -1,3 +1,4 @@
+; TODO: move stuff out of here into seperate asm files
 [BITS 32]
 
 ; Grub
@@ -135,23 +136,57 @@ _syscall:
     iret
 
 
-; void jump_usermode(uint32_t entry, uint32_t user_stack)
-;
-; Drops to ring 3 via iret.
-; Selectors: user code = 0x1B (index 3, RPL=3)
-;            user data = 0x23 (index 4, RPL=3)
+global irq0_handler
+extern sched_tick
+extern current_ksp
+
+irq0_handler:
+    push dword 0
+    push dword 0x20
+    pusha
+    push ds
+    push es
+    push fs
+    push gs
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov eax, [esp + 60]     ; saved CS — check CPL
+    test eax, 3
+    jz .eoi                 ; CPL==0: interrupted kernel, no switch
+
+    push esp
+    call sched_tick
+    add  esp, 4
+
+    mov esp, [current_ksp]
+
+.eoi:
+    mov al, 0x20
+    out 0x20, al
+
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp, 8
+    iret
+    
 
 global jump_usermode
 jump_usermode:
-    mov eax, [esp+4]    ; entry
-    mov ecx, [esp+8]    ; user esp
-
-    push dword 0x23     ; ss
-    push ecx            ; user esp
-    push dword 0x202    ; eflags: IF=1, IOPL=0
-    push dword 0x1B     ; cs
-    push eax            ; eip
-
+    mov eax, [esp+4]
+    mov ecx, [esp+8]
+    push dword 0x23
+    push ecx
+    push dword 0x202
+    push dword 0x1B
+    push eax
     mov dx, 0x23
     mov ds, dx
     mov es, dx
@@ -159,3 +194,12 @@ jump_usermode:
     mov gs, dx
 
     iret
+
+global paging_enable
+paging_enable:
+    mov eax, [esp+4]
+    mov cr3, eax
+    mov eax, cr0
+    or  eax, 0x80000000
+    mov cr0, eax
+    ret
